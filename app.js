@@ -37,6 +37,7 @@ program
                 chalk.red("Ошибка в алгоритме установки зависимостей %s"),
                 e
             )
+            console.log(chalk.red("%s"), e.stack)
         }
     })
 
@@ -51,7 +52,19 @@ program
     .action((_, cmd) => {
         console.log(chalk.bold("Установка зависимостей из package.json"))
 
-        console.log(cmd)
+        const cfgPackage = getPackage(process.cwd())
+        if (!cmd.production) {
+            const inputDevDependencies = Object.entries(
+                cfgPackage.dependencies
+            ).map((package) =>
+                getPackageStructure(`${package[0]}@${package[1]}`)
+            )
+            installPackages(inputDevDependencies, true)
+        }
+        const inputDependencies = Object.entries(
+            cfgPackage.devDependencies
+        ).map((package) => getPackageStructure(`${package[0]}@${package[1]}`))
+        installPackages(inputDependencies, false)
     })
 
 program.parse(process.argv)

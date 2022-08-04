@@ -25,8 +25,12 @@ const getPackageStructure = (package) => {
         name = p[0]
         version = p[1]
     }
-    version ??= "latest"
+    // version ??= "latest"
     return [name, version]
+}
+
+const serializePackage = (package) => {
+    return `${package[0]}@${package[1]}`
 }
 
 const getPackageInfo = (packageName) => {
@@ -74,6 +78,7 @@ const getLinksPackagePath = (package) => {
 const linkInstalledPackage = (packageName, packageVersion) => {
     const linkPackagePath = getLinksPackagePath([packageName, packageVersion])
     const isExists = isSymLinkExists(linkPackagePath)
+    const packagePath = `${packageName}@${packageVersion}`
     console.log(`Зависимость ${packagePath} уже установлена?`, isExists)
     if (isExists) {
         try {
@@ -114,66 +119,139 @@ const addLinks = (packages) => {
     }
 }
 
-// const findVersion = (data, )
-
-const getPackageDependencies = (package) => {
+const getPackageDependencies = (package, cyclicCondler, packageHandler) => {
     try {
-        const info = getPackageInfo(package)
-        const data = info.data
-        const getDep = (dep) =>
-            Object.keys(dep).map((name) => {
-                const infoDep = getPackageInfo(name)
-                const version = infoDep.data.versions.filter((version) =>
-                    semver.satisfies(version, dep[name])
-                )[0]
-                return [name, dep[name]]
-            })
-        return {
-            dependencies: data.dependencies
-                ? getDep(data.dependencies)
-                : undefined,
-            devDependencies: data.devDependencies
-                ? getDep(data.devDependencies)
-                : undefined,
+        const [packageName, packageVersion] = package
+        const info = getPackageInfo(packageName)
+        const addedPackages = {}
+        const getTree = (packageInfo) => {
+            const packageKey = serializePackage([
+                packageInfo.data.name,
+                packageInfo.data.version,
+            ])
+            addedPackages[packageKey] ??= packageInfo
+            let entriesDependencies
+            if (!packageInfo.data.dependencies) {
+                entriesDependencies = null
+            } else {
+                entriesDependencies = Object.entries(
+                    packageInfo.data.dependencies
+                ).map((entry) => {
+                    const name = entry[0]
+                    const semanticVersion = packageVersion || entry[1]
+                    const dependencyInfo = getPackageDependencies(
+                        name,
+                        cyclicCondler,
+                        packageHandler
+                    )
+                    console.log(dependencyInfo, !dependencyInfo)
+                    const isCyclic =
+                        !dependencyInfo ||
+                        Object.values(addedPackages).filter(
+                            (p) =>
+                                p.data.name === dependencyInfo.data.name &&
+                                p.data.version === dependencyInfo.data.version
+                        ).length > 0
+
+                    const dependency = isCyclic ? null : dependencyInfo
+                    return {
+                        dependency,
+                        semanticVersion,
+                        version: dependency ? null : dependency.data.version,
+                    }
+                })
+            }
+
+            const dependencies = entriesDependencies
+                ? Object.fromEntries(entriesDependencies)
+                : null
+            if (cyclicCondler(packageInfo)) {
+                packageHandler(packageInfo)
+            }
+            return {
+                ...packageInfo,
+                data: {
+                    ...packageInfo.data,
+                    dependencies,
+                },
+            }
         }
+
+        return getTree(info)
     } catch (e) {
         console.error(chalk.red("Ошибка при получении зависимостей пакета"), e)
     }
 }
 
 const installPackages = (packages, isDev) => {
+    const packagesInTree = {}
     const nonInstalledPackages = []
+    const allNonInstalledPackages = []
     for (const package of packages) {
-        const [packageName, packageVersion] = package
+        const treePackage = getPackageDependencies(
+            package,
+            (packageInfo) => {
+                const packageKey = serializePackage([
+                    packageInfo.data.name,
+                    packageInfo.data.version,
+                ])
+                if (!packagesInTree[packageKey]) {
+                    packagesInTree[packageKey] = packageInfo
+                    return true
+                }
+                return false
+            },
+            (packageInfo) => {
+                const nonInstalledPackage = linkInstalledPackage(
+                    packageInfo.data.name,
+                    packageInfo.data.version
+                )
+                if (nonInstalledPackage) {
+                    allNonInstalledPackages.push(nonInstalledPackage)
+                }
+            }
+        )
         const nonInstalledPackage = linkInstalledPackage(
-            packageName,
-            packageVersion
+            treePackage.data.name,
+            treePackage.data.version
         )
         if (nonInstalledPackage) {
             nonInstalledPackages.push(nonInstalledPackage)
         }
-        // const infoPackage = getPackageInfo(packageName)
-        const dependencyPackages = getPackageDependencies()
     }
+    const json =
+        Object.values(packagesInTree).reduce((acc, o) => {
+            return acc + "," + JSON.stringify(o)
+        }, "[") + "]"
+    fs.writeFileSync("deps.json", json, "utf-8")
+    return
+    // const nestedNonInstalledPackages = allNonInstalledPackages.filter(
+    //     (nonInstalledPackage) =>
+    //         !nonInstalledPackages.includes(nonInstalledPackage)
+    // )
     const cmdPackages = nonInstalledPackages.reduce(
         (acc, nonInstalledPackage) => `${acc} ${nonInstalledPackage.join("@")}`,
         ""
     )
     if (cmdPackages) {
-        try {
-            console.log("Зависимости, которые нужно установить", cmdPackages)
-            let cmd = `yarn add ${"-D" ? isDev : ""} ${cmdPackages}`
-            execSync(cmd, { stdio: "inherit" })
-        } catch (e) {
-            console.error(chalk.red("Ошибка при установке зависимости %s"), e)
-        }
+        console.log("Зависимости, которые нужно установить", cmdPackages)
+        let cmd = `yarn add ${"-D" ? isDev : ""} ${cmdPackages}`
+        execSync(cmd, { stdio: "inherit" })
+        // try {
+        //     console.log("Зависимости, которые нужно установить", cmdPackages)
+        //     let cmd = `yarn add ${"-D" ? isDev : ""} ${cmdPackages}`
+        //     execSync(cmd, { stdio: "inherit" })
+        // } catch (e) {
+        //     console.error(chalk.red("Ошибка при установке зависимости %s"), e)
+        // }
 
-        addLinks(nonInstalledPackages)
+        addLinks(allNonInstalledPackages)
     }
 }
 
 module.exports = {
     getPackage,
+    serializePackage,
     getLinksDir,
     linkInstalledPackage,
     installPackages,
