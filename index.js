@@ -50,7 +50,7 @@ const getPackageInfo = (packageName) => {
 const getLinksDir = () => {
     try {
         const globalDir = getGlobalDir()
-        console.log("Путь к Yarn", globalDir)
+        // console.log("Путь к Yarn", globalDir)
         const linksPath = Path.join(globalDir, "../", "links")
         if (!fs.existsSync(linksPath)) {
             fs.mkdirSync(linksPath)
@@ -66,24 +66,57 @@ const getLinksDir = () => {
     }
 }
 
+const linksDir = getLinksDir()
+const cwdCfgPackage = getPackage("./")
+
 const isSymLinkExists = (linkPath) => {
     return fs.existsSync(linkPath)
 }
 
 const getLinksPackagePath = (package) => {
     const [name, version] = package
-    return Path.join(getLinksDir(), name, version)
+    return Path.join(linksDir, name, version)
 }
 
 const linkInstalledPackage = (packageName, packageVersion) => {
     const linkPackagePath = getLinksPackagePath([packageName, packageVersion])
     const isExists = isSymLinkExists(linkPackagePath)
     const packagePath = `${packageName}@${packageVersion}`
-    console.log(`Зависимость ${packagePath} уже установлена?`, isExists)
+    // console.log(`Зависимость ${packagePath} уже установлена?`, isExists)
     if (isExists) {
         try {
             const dependencyPath = Path.join(npmPath, packageName)
             console.log("Полный путь к зависимости", dependencyPath)
+
+            if (fs.existsSync(dependencyPath)) {
+                // const depSemanticVersion =
+                //     cwdCfgPackage.dependencies[packageName]
+                // const isEqualVersionDep =
+                //     depSemanticVersion &&
+                //     semver.satisfies(packageVersion, depSemanticVersion)
+                // const devDepSemanticVersion =
+                //     cwdCfgPackage.devDependencies[packageName]
+                // const isEqualVersionDevDep =
+                //     devDepSemanticVersion &&
+                //     semver.satisfies(packageVersion, devDepSemanticVersion)
+                const linkContent = fs.readlinkSync(linkPackagePath)
+                const isAnotherPackage =
+                    Path.normalize(linkContent) !==
+                    Path.normalize(dependencyPath)
+                if (isAnotherPackage) {
+                    console.log("Версии не совпадают")
+                    fs.rm(dependencyPath, {
+                        recursive: true,
+                        force: true,
+                    })
+                } else {
+                    console.log(
+                        chalk.yellowBright("Пакет %s уже установлен локально"),
+                        packagePath
+                    )
+                    return
+                }
+            }
             fs.symlinkSync(linkPackagePath, dependencyPath, "dir")
             console.log(
                 chalk.green(
@@ -106,7 +139,12 @@ const addLinks = (packages) => {
     console.log(chalk.bold("Добавление ссылок на зависимости"))
     for (const [name, version] of packages) {
         const packagePath = `${name}@${version}`
-        const linkPackagePath = getLinksPackagePath([name, version])
+        const packageDir = Path.join(linksDir, name)
+        if (!fs.existsSync(packageDir)) {
+            fs.mkdirSync(packageDir)
+        }
+        // const linkPackagePath = getLinksPackagePath([name, version])
+        const linkPackagePath = Path.join(packageDir, version)
         if (!isSymLinkExists(linkPackagePath)) {
             const dependencyPath = Path.join(npmPath, name)
             console.log("Полный путь к зависимости", dependencyPath)
@@ -115,19 +153,36 @@ const addLinks = (packages) => {
                 chalk.green(`Ссылка на зависимость %s успешно создана`),
                 packagePath
             )
+        } else {
+            console.log(
+                chalk.yellowBright(
+                    `Ссылка на зависимость %s уже существует в хранилище симлинков`
+                ),
+                packagePath
+            )
         }
     }
 }
 
+const findVersion = (packageInfo, semanticVersion) => {
+    return packageInfo.data.versions.filter((version) =>
+        semver.satisfies(version, semanticVersion)
+    )[0]
+}
+
 const getPackageDependencies = (package, cyclicCondler, packageHandler) => {
     try {
-        const [packageName, packageVersion] = package
+        const [packageName, packageSemanticVersion] = package
         const info = getPackageInfo(packageName)
         const addedPackages = {}
         const getTree = (packageInfo) => {
+            const packageExactVersion = findVersion(
+                packageInfo,
+                packageSemanticVersion
+            )
             const packageKey = serializePackage([
                 packageInfo.data.name,
-                packageInfo.data.version,
+                packageExactVersion,
             ])
             addedPackages[packageKey] ??= packageInfo
             let entriesDependencies
@@ -137,27 +192,38 @@ const getPackageDependencies = (package, cyclicCondler, packageHandler) => {
                 entriesDependencies = Object.entries(
                     packageInfo.data.dependencies
                 ).map((entry) => {
-                    const name = entry[0]
-                    const semanticVersion = packageVersion || entry[1]
+                    const dependencyName = entry[0]
+                    const dependencySemanticVersion = entry[1]
+
                     const dependencyInfo = getPackageDependencies(
-                        name,
+                        [dependencyName, dependencySemanticVersion],
                         cyclicCondler,
                         packageHandler
                     )
-                    console.log(dependencyInfo, !dependencyInfo)
+                    const dependencyExactVersion = dependencyInfo
+                        ? null
+                        : findVersion(dependencyInfo, dependencySemanticVersion)
+
                     const isCyclic =
                         !dependencyInfo ||
-                        Object.values(addedPackages).filter(
-                            (p) =>
-                                p.data.name === dependencyInfo.data.name &&
-                                p.data.version === dependencyInfo.data.version
-                        ).length > 0
+                        Object.entries(addedPackages).filter((entry) => {
+                            const packageKey = entry[0]
+                            const packageInfo = entry[1]
+                            const packageExactVersion =
+                                getPackageStructure(packageKey)[1]
+
+                            return (
+                                packageInfo.data.name ===
+                                    dependencyInfo.data.name &&
+                                packageExactVersion === dependencyExactVersion
+                            )
+                        }).length > 0
 
                     const dependency = isCyclic ? null : dependencyInfo
                     return {
                         dependency,
-                        semanticVersion,
-                        version: dependency ? null : dependency.data.version,
+                        semanticVersion: dependencySemanticVersion,
+                        exactVersion: dependencyExactVersion,
                     }
                 })
             }
@@ -165,8 +231,8 @@ const getPackageDependencies = (package, cyclicCondler, packageHandler) => {
             const dependencies = entriesDependencies
                 ? Object.fromEntries(entriesDependencies)
                 : null
-            if (cyclicCondler(packageInfo)) {
-                packageHandler(packageInfo)
+            if (cyclicCondler(packageInfo, packageExactVersion)) {
+                packageHandler(packageInfo, package)
             }
             return {
                 ...packageInfo,
@@ -186,14 +252,15 @@ const getPackageDependencies = (package, cyclicCondler, packageHandler) => {
 const installPackages = (packages, isDev) => {
     const packagesInTree = {}
     const nonInstalledPackages = []
-    const allNonInstalledPackages = []
+    const nestedNonInstalledPackages = []
     for (const package of packages) {
+        let [packageName, packageVersion] = package
         const treePackage = getPackageDependencies(
             package,
-            (packageInfo) => {
+            (packageInfo, packageExactVersion) => {
                 const packageKey = serializePackage([
                     packageInfo.data.name,
-                    packageInfo.data.version,
+                    packageExactVersion,
                 ])
                 if (!packagesInTree[packageKey]) {
                     packagesInTree[packageKey] = packageInfo
@@ -201,13 +268,24 @@ const installPackages = (packages, isDev) => {
                 }
                 return false
             },
-            (packageInfo) => {
+            (packageInfo, package) => {
+                const semanticVersion = package[1]
+                // console.log(package)
+                if (
+                    packageInfo.data.name === packageName &&
+                    // semver.satisfies(packageInfo.data.version, semanticVersion)
+                    packageVersion === semanticVersion
+                ) {
+                    // console.log("Основная зависимость")
+                    return
+                }
+                const exactVersion = findVersion(packageInfo, semanticVersion)
                 const nonInstalledPackage = linkInstalledPackage(
                     packageInfo.data.name,
-                    packageInfo.data.version
+                    exactVersion
                 )
                 if (nonInstalledPackage) {
-                    allNonInstalledPackages.push(nonInstalledPackage)
+                    nestedNonInstalledPackages.push(nonInstalledPackage)
                 }
             }
         )
@@ -219,16 +297,18 @@ const installPackages = (packages, isDev) => {
             nonInstalledPackages.push(nonInstalledPackage)
         }
     }
-    const json =
-        Object.values(packagesInTree).reduce((acc, o) => {
-            return acc + "," + JSON.stringify(o)
-        }, "[") + "]"
-    fs.writeFileSync("deps.json", json, "utf-8")
-    return
-    // const nestedNonInstalledPackages = allNonInstalledPackages.filter(
+    // const json =
+    //     Object.values(packagesInTree).reduce((acc, o) => {
+    //         return acc + "," + JSON.stringify(o)
+    //     }, "[") + "]"
+    // fs.writeFileSync("deps.json", json, "utf-8")
+    // return
+
+    // const nestedNonInstalledPackages = nestedNonInstalledPackages.filter(
     //     (nonInstalledPackage) =>
     //         !nonInstalledPackages.includes(nonInstalledPackage)
     // )
+
     const cmdPackages = nonInstalledPackages.reduce(
         (acc, nonInstalledPackage) => `${acc} ${nonInstalledPackage.join("@")}`,
         ""
@@ -245,7 +325,8 @@ const installPackages = (packages, isDev) => {
         //     console.error(chalk.red("Ошибка при установке зависимости %s"), e)
         // }
 
-        addLinks(allNonInstalledPackages)
+        addLinks(nonInstalledPackages)
+        addLinks(nestedNonInstalledPackages)
     }
 }
 

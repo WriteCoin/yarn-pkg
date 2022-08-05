@@ -2,3 +2,6 @@ example.json
 node_modules
 package-lock.json
 yarn.lock
+test.js
+package_info.js
+deps.json
