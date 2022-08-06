@@ -5,3 +5,4 @@ yarn.lock
 test.js
 package_info.js
 deps.json
+tests

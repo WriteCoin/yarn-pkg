@@ -4,9 +4,12 @@ const {
     getPackage,
     installPackages,
     getPackageStructure,
+    getCachedVersions,
+    getSharedCachedVersions,
 } = require("./index.js")
 
 const thisPackage = getPackage(__dirname)
+let allPackageVersions
 
 program
     .version(thisPackage.version)
@@ -68,3 +71,7 @@ program
     })
 
 program.parse(process.argv)
+
+(async () => {
+    await getSharedCachedVersions()
+})()
