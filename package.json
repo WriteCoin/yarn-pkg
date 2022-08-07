@@ -1,6 +1,6 @@
 {
     "name": "@write-coin/yarn-pkg",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "description": "CLI yarn для экономной установки зависимостей",
     "author": "WriteCoin <sovtsardom@gmail.com>",
     "bin": {
@@ -10,8 +10,10 @@
     "dependencies": {
         "chalk": "^4.1.2",
         "commander": "^9.4.0",
+        "false": "^0.0.4",
         "files": "1.1.0",
         "inquirer": "^9.0.2",
+        "query-string": "7.1.1",
         "semver": "^7.3.7"
     },
     "devDependencies": {}

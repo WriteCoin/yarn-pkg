@@ -58,6 +58,9 @@ const getPackageStructure = (package) => {
 }
 
 const serializePackage = (package) => {
+    if (!package[1]) {
+        return package[0]
+    }
     return `${package[0]}@${package[1]}`
 }
 
@@ -77,6 +80,7 @@ const isSymLinkExists = (linkPath) => {
 }
 
 const getLinksPackagePath = (package) => {
+    // console.log(package, linksDir)
     const [name, version] = package
     return Path.join(linksDir, name, version)
 }
@@ -133,9 +137,9 @@ const getCachedVersionsFromSepJson = async () => {
 }
 
 const getCachedVersions = async () => {
-    console.log("Получение закешированных версий")
+    // console.log("Получение закешированных версий")
     const getPackageVersions = async (dir, prePackageName) => {
-        console.log("Получение версий пакета, папка", dir)
+        // console.log("Получение версий пакета, папка", dir)
         const ls = await files.ls(dir)
         let dirs = []
         let jsonPath
@@ -151,7 +155,7 @@ const getCachedVersions = async () => {
             }
         }
         if (dirs.length > 0) {
-            console.log("Обход вложенных папок", dirs)
+            // console.log("Обход вложенных папок", dirs)
             for (const dir of dirs) {
                 return getPackageVersions(
                     dir,
@@ -159,12 +163,12 @@ const getCachedVersions = async () => {
                 )
             }
         } else {
-            console.log(
-                "Получение версий, файл",
-                JSON_VERSIONS_FILE_NAME,
-                "найден?",
-                !!jsonPath
-            )
+            // console.log(
+            //     "Получение версий, файл",
+            //     JSON_VERSIONS_FILE_NAME,
+            //     "найден?",
+            //     !!jsonPath
+            // )
             const packageName = prePackageName
             if (!jsonPath) {
                 return { [packageName]: [] }
@@ -172,8 +176,8 @@ const getCachedVersions = async () => {
             const packageVersions = JSON.parse(
                 fs.readFileSync(jsonPath, "utf-8")
             )
-            console.log("Имя пакета", packageName)
-            console.log("Версии: ", packageVersions)
+            // console.log("Имя пакета", packageName)
+            // console.log("Версии: ", packageVersions)
             return {
                 [packageName]: packageVersions,
             }
@@ -195,9 +199,10 @@ let allVersions
 
 const getSharedCachedVersions = async () => {
     allVersions = await getCachedVersions()
+    // console.log(allVersions)
 }
 
-const getPackageWithExactedVersion = (packageWithSemanticVersion) => {
+const getCachePackageWithExactedVersion = (packageWithSemanticVersion) => {
     const [name, version] = packageWithSemanticVersion
     if (!allVersions[name]) {
         throw new Error("Версии закешированного пакета отсутствуют")
@@ -222,15 +227,22 @@ const getPackageInfoFromCommand = (package) => {
     return JSON.parse(info)
 }
 
-const cachePackageInfo = (info) => {
-    fs.writeFileSync(pathToJson, JSON.stringify(info))
+const cachePackageInfo = (package, packageInfo) => {
+    const pathToJson = `${getLinksPackagePath(package)}.json`
+    pavePathsToLinks(package[0])
+    fs.writeFileSync(pathToJson, JSON.stringify(packageInfo))
 }
 
 const updatePackageVersions = (packageWithExactedVersion) => {
-    const pathToVersions = `${getLinksPackagePath(
-        packageWithExactedVersion
-    )}${JSON_VERSIONS_FILE_NAME}`
+    const pathToVersions = Path.join(
+        linksDir,
+        packageWithExactedVersion[0],
+        JSON_VERSIONS_FILE_NAME
+    )
     const newVersion = packageWithExactedVersion[1]
+    if (!fs.existsSync(pathToVersions)) {
+        fs.writeFileSync(pathToVersions, "[]")
+    }
     const oldVersions = JSON.parse(fs.readFileSync(pathToVersions, "utf-8"))
     let newVersions
     if (!oldVersions.includes(newVersion)) {
@@ -243,15 +255,23 @@ const updatePackageVersions = (packageWithExactedVersion) => {
 
 const getPackageInfo = (package) => {
     try {
-        const packageWithExactedVersion = getPackageWithExactedVersion(package)
         try {
+            const packageWithExactedVersion =
+                getCachePackageWithExactedVersion(package)
+            // console.log("Попытка получить закешированную информацию о пакете")
             return getCachedPackageInfo(packageWithExactedVersion)
         } catch {
-            const resultInfo = getPackageInfoFromCommand(
-                packageWithExactedVersion
-            )
-            cachePackageInfo(resultInfo)
+            // console.log("Попытка не удалась, поиск в интернете")
+            const resultInfo = getPackageInfoFromCommand([package[0]])
+            const packageWithExactedVersion = [
+                package[0],
+                findVersion(resultInfo, package[1]),
+            ]
+            // console.log("Информация получена")
+            cachePackageInfo(packageWithExactedVersion, resultInfo)
+            // console.log("Информация закеширована")
             updatePackageVersions(packageWithExactedVersion)
+            // console.log("Версии пакета обновлены")
             return resultInfo
         }
     } catch (e) {
@@ -259,6 +279,7 @@ const getPackageInfo = (package) => {
             chalk.red("Ошибка при получении информации о пакете %s"),
             e
         )
+        console.log(e.stack)
     }
 }
 
@@ -334,8 +355,13 @@ const addLinks = (packages) => {
             const dependencyPath = Path.join(npmPath, name)
             console.log("Полный путь к зависимости", dependencyPath)
             if (fs.existsSync(linkPackagePath)) {
+                console.log("Удаление ссылки", linkPackagePath)
                 fs.rm(linkPackagePath, { recursive: true, force: true })
             }
+            // if (fs.existsSync(dependencyPath)) {
+            //     console.log("Удаление папки зависимости", dependencyPath)
+            //     fs.rm(dependencyPath, { recursive: true, force: true })
+            // }
             fs.symlinkSync(dependencyPath, linkPackagePath, "dir")
             console.log(
                 chalk.green(`Ссылка на зависимость %s успешно создана`),
@@ -381,7 +407,10 @@ const getPackageDependencies = (package, cyclicCondler, packageHandler) => {
                 packageInfo.data.name,
                 packageExactVersion,
             ])
+            // console.log(packageKey)
             addedPackages[packageKey] ??= packageInfo
+            // console.log(packageInfo)
+            // console.log(packageInfo.data.dependencies)
             let entriesDependencies
             if (!packageInfo.data.dependencies) {
                 entriesDependencies = null
@@ -389,6 +418,7 @@ const getPackageDependencies = (package, cyclicCondler, packageHandler) => {
                 entriesDependencies = Object.entries(
                     packageInfo.data.dependencies
                 ).map((entry) => {
+                    console.log(entry)
                     const dependencyName = entry[0]
                     const dependencySemanticVersion = entry[1]
 
@@ -450,6 +480,7 @@ const installPackages = (packages, isDev) => {
     const packagesInTree = {}
     const nonInstalledPackages = []
     const nestedNonInstalledPackages = []
+    console.log(chalk.bold("Получение дерева зависимостей"))
     for (const package of packages) {
         let [packageName, packageVersion] = package
         const treePackage = getPackageDependencies(
@@ -486,9 +517,13 @@ const installPackages = (packages, isDev) => {
                 }
             }
         )
-        packageVersion ??= "latest"
+        // packageVersion ??= "latest"
         const exactVersion = findVersion(treePackage, packageVersion)
         // console.log("Точная версия: ", exactVersion)
+        console.log(
+            "Основная зависимость:",
+            `${treePackage.data.name}/${exactVersion}`
+        )
         const nonInstalledPackage = linkInstalledPackage(
             treePackage.data.name,
             exactVersion
@@ -508,12 +543,12 @@ const installPackages = (packages, isDev) => {
     //     (nonInstalledPackage) =>
     //         !nonInstalledPackages.includes(nonInstalledPackage)
     // )
-
     const cmdPackages = nonInstalledPackages.reduce(
         (acc, nonInstalledPackage) => `${acc} ${nonInstalledPackage.join("@")}`,
         ""
     )
     if (cmdPackages) {
+        console.log(chalk.bold("Установка"))
         console.log("Зависимости, которые нужно установить", cmdPackages)
         let cmd = `yarn add ${"-D" ? isDev : ""} ${cmdPackages}`
         execSync(cmd, { stdio: "inherit" })
@@ -528,6 +563,7 @@ const installPackages = (packages, isDev) => {
         addLinks(nonInstalledPackages)
         addLinks(nestedNonInstalledPackages)
     }
+    console.log(chalk.bold("Все зависимости успешно установлены"))
 }
 
 module.exports = {
@@ -539,6 +575,7 @@ module.exports = {
     getPackageStructure,
     getLinksPackagePath,
     getPackageInfo,
+    getPackageInfoFromCommand,
     findVersion,
     getCachedVersionsFromSepJson,
     getCachedVersions,

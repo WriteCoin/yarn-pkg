@@ -9,7 +9,6 @@ const {
 } = require("./index.js")
 
 const thisPackage = getPackage(__dirname)
-let allPackageVersions
 
 program
     .version(thisPackage.version)
@@ -32,7 +31,8 @@ program
     .option("-D, --dev", "Установить как зависимость для разработки")
     .alias("i")
     .description("Установить выбранные зависимости.")
-    .action((packages, cmd) => {
+    .action(async (packages, cmd) => {
+        await getSharedCachedVersions()
         try {
             actionInstallPackages(packages, cmd)
         } catch (e) {
@@ -52,7 +52,8 @@ program
     )
     .alias("ia")
     .description("Установить зависимости из package.json")
-    .action((_, cmd) => {
+    .action(async (_, cmd) => {
+        await getSharedCachedVersions()
         console.log(chalk.bold("Установка зависимостей из package.json"))
 
         const cfgPackage = getPackage(process.cwd())
@@ -71,7 +72,3 @@ program
     })
 
 program.parse(process.argv)
-
-(async () => {
-    await getSharedCachedVersions()
-})()
